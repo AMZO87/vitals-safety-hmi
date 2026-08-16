@@ -1,0 +1,227 @@
+{
+  "name": "STM32F7508-DISCOVERY",
+  "source_ide": "STM32CubeIDE",
+  "path": "e:\\Projects\\STM32_Course\\STM32F7508\\STM32CubeF7\\Projects\\STM32F7508-DISCO\\Applications\\Display\\LTDC_PicturesFromSDCard\\SW4STM32\\STM32F7508-DISCOVERY",
+  "languages": [
+      "C"
+  ],
+  "configurations": [
+    {
+      "name": "Debug",
+      "output_filename": "STM32F7508-DISCOVERY",
+      "type": "Executable",
+      "toolchain_type": "GCC",
+      "toolchain_prefix": "arm-none-eabi-",
+      "mcu": "STM32F750N8Hx",
+      "board": "genericBoard",
+      "sources": [
+        { "path": "../startup_stm32f750xx.s" },
+        { "path": "../syscalls.c" },
+        { "path": "../../Src/fatfs_storage.c" },
+        { "path": "../../Src/main.c" },
+        { "path": "../../Src/stm32f7xx_it.c" },
+        { "path": "../../readme.txt" },
+        { "path": "../../../../../../../Drivers/BSP/STM32F7508-Discovery/stm32f7508_discovery.c" },
+        { "path": "../../../../../../../Drivers/BSP/STM32F7508-Discovery/stm32f7508_discovery_lcd.c" },
+        { "path": "../../../../../../../Drivers/BSP/STM32F7508-Discovery/stm32f7508_discovery_sd.c" },
+        { "path": "../../../../../../../Drivers/BSP/STM32F7508-Discovery/stm32f7508_discovery_sdram.c" },
+        { "path": "../../Src/system_stm32f7xx.c" },
+        { "path": "../../../../../../../Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal.c" },
+        { "path": "../../../../../../../Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_cortex.c" },
+        { "path": "../../../../../../../Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_dma.c" },
+        { "path": "../../../../../../../Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_dma2d.c" },
+        { "path": "../../../../../../../Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_flash.c" },
+        { "path": "../../../../../../../Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_flash_ex.c" },
+        { "path": "../../../../../../../Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_gpio.c" },
+        { "path": "../../../../../../../Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_i2c.c" },
+        { "path": "../../../../../../../Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_i2c_ex.c" },
+        { "path": "../../../../../../../Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_ltdc.c" },
+        { "path": "../../../../../../../Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_pwr.c" },
+        { "path": "../../../../../../../Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_pwr_ex.c" },
+        { "path": "../../../../../../../Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_rcc.c" },
+        { "path": "../../../../../../../Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_rcc_ex.c" },
+        { "path": "../../../../../../../Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_sd.c" },
+        { "path": "../../../../../../../Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_sdram.c" },
+        { "path": "../../../../../../../Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_uart.c" },
+        { "path": "../../../../../../../Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_ll_fmc.c" },
+        { "path": "../../../../../../../Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_ll_sdmmc.c" },
+        { "path": "../../../../../../../Middlewares/Third_Party/FatFs/src/diskio.c" },
+        { "path": "../../../../../../../Middlewares/Third_Party/FatFs/src/ff.c" },
+        { "path": "../../../../../../../Middlewares/Third_Party/FatFs/src/ff_gen_drv.c" },
+        { "path": "../../Src/sd_diskio.c" },
+        { "path": "../../../../../../../Middlewares/Third_Party/FatFs/src/option/syscall.c" },
+        { "path": "../../../../../../../Middlewares/Third_Party/FatFs/src/option/unicode.c" }
+      ],
+      "tools": [
+            {
+              "type": "c_assembler",
+              "options": {
+                      "option.debuglevel": "-g3",
+                      "option.preprocessassembler": "-x assembler-with-cpp"
+              },
+              "flags": [
+                  "-mfpu=fpv5-sp-d16",
+                  "-mfloat-abi=hard",
+                  "-mthumb",
+                  "--specs=nano.specs",
+                  "-mcpu=cortex-m7",
+                  "-g3",
+                  "-x",
+                  "assembler-with-cpp"
+              ]
+            },
+            {
+              "type": "c_compiler",
+              "options": {
+                      "option.languagestandard": "-std=gnu11",
+                      "option.debuglevel": "-g3",
+                      "option.definedsymbols": "-DUSE_HAL_DRIVER, -DSTM32F750xx, -DUSE_STM32F7508_DISCO, -DAPPLICATION_ADDRESS=0x90000000",
+                      "option.includepaths": "-I../../../Inc, -I../../../../../../../../Drivers/CMSIS/Device/ST/STM32F7xx/Include, -I../../../../../../../../Drivers/STM32F7xx_HAL_Driver/Inc, -I../../../../../../../../Drivers/BSP/STM32F7508-Discovery, -I../../../../../../../../Utilities, -I../../../../../../../../Utilities/Fonts, -I../../../../../../../../Middlewares/Third_Party/FatFs/src, -I../../../../../../../../Drivers/BSP/Components, -I../../../../../../../../Drivers/CMSIS/Include",
+                      "option.optimization.level": "-Os",
+                      "option.ffunction": "-ffunction-sections",
+                      "option.warnings.all": "-Wall",
+                      "option.fstackusage": "-fstack-usage",
+                      "option.cyclomaticcomplexity": "-fcyclomatic-complexity"
+              },
+              "flags": [
+                  "-mfpu=fpv5-sp-d16",
+                  "-mfloat-abi=hard",
+                  "-mthumb",
+                  "--specs=nano.specs",
+                  "-mcpu=cortex-m7",
+                  "-std=gnu11",
+                  "-g3",
+                  "-DUSE_HAL_DRIVER",
+                  "-DSTM32F750xx",
+                  "-DUSE_STM32F7508_DISCO",
+                  "-DAPPLICATION_ADDRESS=0x90000000",
+                  "-I../../../Inc",
+                  "-I../../../../../../../../Drivers/CMSIS/Device/ST/STM32F7xx/Include",
+                  "-I../../../../../../../../Drivers/STM32F7xx_HAL_Driver/Inc",
+                  "-I../../../../../../../../Drivers/BSP/STM32F7508-Discovery",
+                  "-I../../../../../../../../Utilities",
+                  "-I../../../../../../../../Utilities/Fonts",
+                  "-I../../../../../../../../Middlewares/Third_Party/FatFs/src",
+                  "-I../../../../../../../../Drivers/BSP/Components",
+                  "-I../../../../../../../../Drivers/CMSIS/Include",
+                  "-Os",
+                  "-ffunction-sections",
+                  "-Wall",
+                  "-fstack-usage",
+                  "-fcyclomatic-complexity"
+              ]
+            },
+            {
+              "type": "cpp_compiler",
+              "options": {
+                      "option.languagestandard": "-std=gnu++14",
+                      "option.debuglevel": "-g3",
+                      "option.definedsymbols": "-DUSE_HAL_DRIVER, -DSTM32F750xx, -DUSE_STM32F7508_DISCO, -DAPPLICATION_ADDRESS=0x90000000",
+                      "option.includepaths": "-I../../../Inc, -I../../../../../../../../Drivers/CMSIS/Device/ST/STM32F7xx/Include, -I../../../../../../../../Drivers/STM32F7xx_HAL_Driver/Inc, -I../../../../../../../../Drivers/BSP/STM32F7508-Discovery, -I../../../../../../../../Utilities, -I../../../../../../../../Utilities/Fonts, -I../../../../../../../../Middlewares/Third_Party/FatFs/src, -I../../../../../../../../Drivers/BSP/Components, -I../../../../../../../../Drivers/CMSIS/Include",
+                      "option.optimization.level": "-Os",
+                      "option.ffunction": "-ffunction-sections",
+                      "option.noexceptions": "-fno-exceptions",
+                      "option.nortti": "-fno-rtti",
+                      "option.nousecxaatexit": "-fno-use-cxa-atexit",
+                      "option.warnings.all": "-Wall",
+                      "option.fstackusage": "-fstack-usage",
+                      "option.cyclomaticcomplexity": "-fcyclomatic-complexity"
+              },
+              "flags": [
+                  "-mfpu=fpv5-sp-d16",
+                  "-mfloat-abi=hard",
+                  "-mthumb",
+                  "--specs=nano.specs",
+                  "-mcpu=cortex-m7",
+                  "-std=gnu++14",
+                  "-g3",
+                  "-DUSE_HAL_DRIVER",
+                  "-DSTM32F750xx",
+                  "-DUSE_STM32F7508_DISCO",
+                  "-DAPPLICATION_ADDRESS=0x90000000",
+                  "-I../../../Inc",
+                  "-I../../../../../../../../Drivers/CMSIS/Device/ST/STM32F7xx/Include",
+                  "-I../../../../../../../../Drivers/STM32F7xx_HAL_Driver/Inc",
+                  "-I../../../../../../../../Drivers/BSP/STM32F7508-Discovery",
+                  "-I../../../../../../../../Utilities",
+                  "-I../../../../../../../../Utilities/Fonts",
+                  "-I../../../../../../../../Middlewares/Third_Party/FatFs/src",
+                  "-I../../../../../../../../Drivers/BSP/Components",
+                  "-I../../../../../../../../Drivers/CMSIS/Include",
+                  "-Os",
+                  "-ffunction-sections",
+                  "-fno-exceptions",
+                  "-fno-rtti",
+                  "-fno-use-cxa-atexit",
+                  "-Wall",
+                  "-fstack-usage",
+                  "-fcyclomatic-complexity"
+              ]
+            },
+            {
+              "type": "c_linker",
+              "options": {
+                      "option.script": "-T\"../STM32F750N8Hx_FLASH.ld\"",
+                      "option.systemcalls": "--specs=nosys.specs",
+                      "option.map": "-Wl,-Map=\"STM32F7508-DISCOVERY.map\"",
+                      "option.gcsections": "-Wl,--gc-sections",
+                      "option.static": "-static",
+                      "option.generate.secure.lib": "-Wl,--cmse-implib -Wl,--out-implib=./secure_nsclib.o",
+                      "option.libmath": "-Wl,--start-group -lc -lm -Wl,--end-group",
+                      "option.otherflags": "[]"
+              },
+              "flags": [
+                  "-mfpu=fpv5-sp-d16",
+                  "-mfloat-abi=hard",
+                  "-mthumb",
+                  "--specs=nano.specs",
+                  "-mcpu=cortex-m7",
+                  "-T\"../STM32F750N8Hx_FLASH.ld\"",
+                  "--specs=nosys.specs",
+                  "-Wl,-Map=\"STM32F7508-DISCOVERY.map\"",
+                  "-Wl,--gc-sections",
+                  "-static"
+              ]
+            },
+            {
+              "type": "cpp_linker",
+              "options": {
+                      "option.script": "-T\"../STM32F750N8Hx_FLASH.ld\"",
+                      "option.systemcalls": "--specs=nosys.specs",
+                      "option.map": "-Wl,-Map=\"STM32F7508-DISCOVERY.map\"",
+                      "option.gcsections": "-Wl,--gc-sections",
+                      "option.static": "-static",
+                      "option.generate.secure.lib": "-Wl,--cmse-implib -Wl,--out-implib=./secure_nsclib.o",
+                      "option.libmath": "-Wl,--start-group -lc -lm -lstdc++ -lsupc++ -Wl,--end-group"
+              },
+              "flags": [
+                  "-mfpu=fpv5-sp-d16",
+                  "-mfloat-abi=hard",
+                  "-mthumb",
+                  "--specs=nano.specs",
+                  "-mcpu=cortex-m7",
+                  "-T\"../STM32F750N8Hx_FLASH.ld\"",
+                  "--specs=nosys.specs",
+                  "-Wl,-Map=\"STM32F7508-DISCOVERY.map\"",
+                  "-Wl,--gc-sections",
+                  "-static"
+              ]
+            },
+            {
+              "type": "c_archiver",
+              "options": {
+                      "option.replace": "-r"
+              },
+              "flags": [
+                  "-mfpu=fpv5-sp-d16",
+                  "-mfloat-abi=hard",
+                  "-mthumb",
+                  "--specs=nano.specs",
+                  "-mcpu=cortex-m7",
+                  "-r"
+              ]
+            }
+        ]
+    }
+  ]
+}

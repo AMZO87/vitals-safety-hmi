@@ -1,0 +1,30 @@
+# CMake build output
+build/
+CMakeFiles/
+CMakeCache.txt
+CMakeUserPresets.json
+compile_commands.json
+
+# STM32CubeMX
+mx.scratch
+!.settings
+
+# STM32CubeIDE build output (if the desktop CubeIDE project still sits alongside)
+Debug/
+Release/
+*.launch
+*_converter.log
+
+# Editor
+.vscode/
+
+# OS junk
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+desktop.ini
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
