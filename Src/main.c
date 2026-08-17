@@ -19,6 +19,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "lv_port_disp.h"
+#include "lv_port_indev.h"
 
 /** @addtogroup STM32F7xx_HAL_Applications
   * @{
@@ -58,6 +59,7 @@ static void LCD_Config(void);
 static void SystemClock_Config(void);
 static void Error_Handler(void);
 static void CPU_CACHE_Enable(void);
+static void btn_event_cb(lv_event_t * e);
 
 /* Private functions ---------------------------------------------------------*/
 
@@ -271,14 +273,44 @@ int main(void)
   lv_display_set_flush_cb(disp, my_flush_cb);
   lv_display_set_buffers(disp, lv_draw_buf, NULL, sizeof(lv_draw_buf), LV_DISPLAY_RENDER_MODE_PARTIAL);
 
+  BSP_TS_Init(LV_DISP_HOR_RES, LV_DISP_VER_RES);
+
+  lv_indev_t *indev = lv_indev_create();
+  lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
+  lv_indev_set_read_cb(indev, my_touchpad_read_cb);
+  lv_indev_set_display(indev, disp);
+
   lv_obj_t * label = lv_label_create(lv_screen_active());
   lv_label_set_text(label, "Hello");
+  lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 20);
+
+  /* v9 renamed lv_btn_create -> lv_button_create */
+  lv_obj_t * btn = lv_button_create(lv_screen_active());
+  lv_obj_align(btn, LV_ALIGN_CENTER, 0, 20);
+  lv_obj_t * btn_label = lv_label_create(btn);
+  lv_label_set_text(btn_label, "Press me");
+  lv_obj_add_event_cb(btn, btn_event_cb, LV_EVENT_CLICKED, label);
 
   while(1)
   {
     lv_timer_handler();
     HAL_Delay(5);
   }
+}
+
+/**
+  * @brief  LV_EVENT_CLICKED handler for the "Press me" button: toggles the
+  *         text of the label passed in as user_data between two strings.
+  * @param  e: event descriptor (user_data holds the target label)
+  * @retval None
+  */
+static void btn_event_cb(lv_event_t * e)
+{
+  static uint8_t pressed = 0;
+  lv_obj_t * target_label = (lv_obj_t *)lv_event_get_user_data(e);
+
+  pressed = !pressed;
+  lv_label_set_text(target_label, pressed ? "Pressed!" : "Hello");
 }
 
 /**

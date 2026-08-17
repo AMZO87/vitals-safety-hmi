@@ -23,6 +23,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "stm32f7508_discovery.h"
 #include "stm32f7508_discovery_lcd.h"
+#include "stm32f7508_discovery_ts.h"
 #include <stdlib.h>
 #include "fatfs_storage.h"
 
