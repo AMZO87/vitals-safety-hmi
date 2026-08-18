@@ -20,6 +20,7 @@
 #include "main.h"
 #include "lv_port_disp.h"
 #include "lv_port_indev.h"
+#include <math.h>
 
 /** @addtogroup STM32F7xx_HAL_Applications
   * @{
@@ -42,6 +43,10 @@
    my_flush_cb() copies from here into the SDRAM frame buffer at LCD_FB_START_ADDRESS. */
 static uint8_t lv_draw_buf[LV_DISP_HOR_RES * LV_DRAW_BUF_LINES * 4U];
 
+/* Simulated vitals trend chart: written by chart_timer_cb(), created in main(). */
+static lv_obj_t * chart;
+static lv_chart_series_t * chart_series;
+
 #if 0 /* BMP/FatFS: disabled */
 FATFS SD_FatFs;  /* File system object for SD card logical drive */
 char SD_Path[4]; /* SD card logical drive path */
@@ -59,7 +64,10 @@ static void LCD_Config(void);
 static void SystemClock_Config(void);
 static void Error_Handler(void);
 static void CPU_CACHE_Enable(void);
+#if 0 /* "Press me" button: no longer needed once touch was proven working */
 static void btn_event_cb(lv_event_t * e);
+#endif /* "Press me" button: no longer needed once touch was proven working */
+static void chart_timer_cb(lv_timer_t * timer);
 
 /* Private functions ---------------------------------------------------------*/
 
@@ -280,16 +288,55 @@ int main(void)
   lv_indev_set_read_cb(indev, my_touchpad_read_cb);
   lv_indev_set_display(indev, disp);
 
-  lv_obj_t * label = lv_label_create(lv_screen_active());
-  lv_label_set_text(label, "Hello");
-  lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 20);
+  /* v9 dropped the LV_THEME_DEFAULT_DARK macro from older versions - dark mode
+     is now the `dark` bool param of lv_theme_default_init(). lv_theme_default_init()
+     does not attach itself to the display, so lv_display_set_theme() is required too. */
+  lv_color_t theme_color = lv_palette_main(LV_PALETTE_BLUE);
+  lv_theme_t * theme = lv_theme_default_init(disp, theme_color, theme_color, true, LV_FONT_DEFAULT);
+  lv_display_set_theme(disp, theme);
 
+  /* Status banner: hardcoded green/NORMAL for now - Phase 5 wires this to
+     actual fault detection. */
+  lv_obj_t * status_banner = lv_obj_create(lv_screen_active());
+  lv_obj_set_size(status_banner, LV_DISP_HOR_RES, 34);
+  lv_obj_align(status_banner, LV_ALIGN_TOP_MID, 0, 0);
+  lv_obj_set_style_radius(status_banner, 0, 0);
+  lv_obj_set_style_bg_color(status_banner, lv_palette_main(LV_PALETTE_GREEN), 0);
+  lv_obj_set_style_bg_opa(status_banner, LV_OPA_COVER, 0);
+
+  lv_obj_t * status_label = lv_label_create(status_banner);
+  lv_label_set_text(status_label, LV_SYMBOL_WARNING " NORMAL");
+  lv_obj_center(status_label);
+
+  lv_obj_t * hr_label = lv_label_create(lv_screen_active());
+  lv_obj_set_style_text_font(hr_label, &lv_font_montserrat_48, 0);
+  lv_label_set_text(hr_label, "72 BPM");
+  lv_obj_align(hr_label, LV_ALIGN_TOP_MID, 0, 42);
+
+  lv_obj_t * spo2_label = lv_label_create(lv_screen_active());
+  lv_obj_set_style_text_font(spo2_label, &lv_font_montserrat_48, 0);
+  lv_label_set_text(spo2_label, "98%");
+  lv_obj_align(spo2_label, LV_ALIGN_TOP_MID, 0, 100);
+
+  /* Rolling-window trend chart: simulated data pushed by chart_timer_cb(). */
+  chart = lv_chart_create(lv_screen_active());
+  lv_obj_set_size(chart, 440, 95);
+  lv_obj_align(chart, LV_ALIGN_TOP_MID, 0, 165);
+  lv_chart_set_type(chart, LV_CHART_TYPE_LINE);
+  lv_chart_set_update_mode(chart, LV_CHART_UPDATE_MODE_SHIFT);
+  lv_chart_set_point_count(chart, 30);
+  chart_series = lv_chart_add_series(chart, lv_palette_main(LV_PALETTE_RED), LV_CHART_AXIS_PRIMARY_Y);
+
+  lv_timer_create(chart_timer_cb, 500, NULL);
+
+#if 0 /* "Press me" button: no longer needed once touch was proven working */
   /* v9 renamed lv_btn_create -> lv_button_create */
   lv_obj_t * btn = lv_button_create(lv_screen_active());
-  lv_obj_align(btn, LV_ALIGN_CENTER, 0, 20);
+  lv_obj_align(btn, LV_ALIGN_BOTTOM_MID, 0, -8);
   lv_obj_t * btn_label = lv_label_create(btn);
   lv_label_set_text(btn_label, "Press me");
-  lv_obj_add_event_cb(btn, btn_event_cb, LV_EVENT_CLICKED, label);
+  lv_obj_add_event_cb(btn, btn_event_cb, LV_EVENT_CLICKED, btn_label);
+#endif /* "Press me" button: no longer needed once touch was proven working */
 
   while(1)
   {
@@ -298,6 +345,7 @@ int main(void)
   }
 }
 
+#if 0 /* "Press me" button: no longer needed once touch was proven working */
 /**
   * @brief  LV_EVENT_CLICKED handler for the "Press me" button: toggles the
   *         text of the label passed in as user_data between two strings.
@@ -310,7 +358,28 @@ static void btn_event_cb(lv_event_t * e)
   lv_obj_t * target_label = (lv_obj_t *)lv_event_get_user_data(e);
 
   pressed = !pressed;
-  lv_label_set_text(target_label, pressed ? "Pressed!" : "Hello");
+  lv_label_set_text(target_label, pressed ? "Pressed!" : "Press me");
+}
+#endif /* "Press me" button: no longer needed once touch was proven working */
+
+/**
+  * @brief  lv_timer callback (500ms period, registered in main()): pushes a
+  *         simulated sine-wave value into the chart to prove it scrolls.
+  *         Placeholder data source only - not a real vitals signal.
+  * @param  timer: unused
+  * @retval None
+  */
+static void chart_timer_cb(lv_timer_t * timer)
+{
+  static float angle = 0.0f;
+  int32_t value;
+
+  (void)timer;
+
+  value = 50 + (int32_t)(20.0f * sinf(angle));
+  angle += 0.3f;
+
+  lv_chart_set_next_value(chart, chart_series, value);
 }
 
 /**
