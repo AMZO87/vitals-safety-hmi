@@ -37,6 +37,8 @@ target_sources(${PROJECT_NAME} PRIVATE
 # Add include directories
 target_include_directories(${PROJECT_NAME} PRIVATE
   # User defined include directories
+  "${CMAKE_CURRENT_SOURCE_DIR}/Middlewares/Third_Party/FreeRTOS/Source/include"
+  "${CMAKE_CURRENT_SOURCE_DIR}/Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM7/r0p1"
 )
 
 # Compiler options

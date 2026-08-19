@@ -98,16 +98,19 @@ LoopFillZerobss:
 .size  Reset_Handler, .-Reset_Handler
 
 /**
- * @brief  This is the code that gets called when the processor receives an 
- *         unexpected interrupt.  This simply enters an infinite loop, preserving
- *         the system state for examination by a debugger.
- * @param  None     
- * @retval None       
+ * @brief  This is the code that gets called when the processor receives an
+ *         unexpected interrupt. Branches to Fault_LED_Blink() (defined in
+ *         Src/stm32f7xx_it.c - the same ~2Hz LED signal HardFault_Handler()
+ *         uses), which is safe to hit this early: it re-inits the LED GPIO
+ *         itself rather than assuming any prior init has run, and uses a
+ *         plain busy-wait counter rather than any tick/scheduler service
+ *         that might not exist yet. Never returns.
+ * @param  None
+ * @retval None
 */
     .section  .text.Default_Handler,"ax",%progbits
 Default_Handler:
-Infinite_Loop:
-  b  Infinite_Loop
+  b  Fault_LED_Blink
   .size  Default_Handler, .-Default_Handler
 /******************************************************************************
 *

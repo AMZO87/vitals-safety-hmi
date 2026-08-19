@@ -6,6 +6,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/Src/main.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/Src/lv_port_disp.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/Src/lv_port_indev.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Src/freertos_hooks.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/Src/stm32f7xx_it.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/readme.txt"
     "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/BSP/STM32F7508-Discovery/stm32f7508_discovery.c"
@@ -40,6 +41,12 @@ target_sources(${PROJECT_NAME} PRIVATE
     # "${CMAKE_CURRENT_SOURCE_DIR}/Src/sd_diskio.c"
     # "${CMAKE_CURRENT_SOURCE_DIR}/Middlewares/Third_Party/FatFs/src/option/syscall.c"
     # "${CMAKE_CURRENT_SOURCE_DIR}/Middlewares/Third_Party/FatFs/src/option/unicode.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Middlewares/Third_Party/FreeRTOS/Source/tasks.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Middlewares/Third_Party/FreeRTOS/Source/queue.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Middlewares/Third_Party/FreeRTOS/Source/list.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Middlewares/Third_Party/FreeRTOS/Source/timers.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM7/r0p1/port.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Middlewares/Third_Party/FreeRTOS/Source/portable/MemMang/heap_4.c"
 )
 
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/STM32F750N8Hx_FLASH.ld" "${CMAKE_CURRENT_BINARY_DIR}" COPYONLY)

@@ -20,7 +20,9 @@
 #include "main.h"
 #include "lv_port_disp.h"
 #include "lv_port_indev.h"
-#include <math.h>
+#include "FreeRTOS.h"
+#include "task.h"
+#include "queue.h"
 
 /** @addtogroup STM32F7xx_HAL_Applications
   * @{
@@ -31,6 +33,12 @@
   */ 
 
 /* Private typedef -----------------------------------------------------------*/
+typedef struct
+{
+  uint8_t hr;
+  uint8_t spo2;
+} vitals_data_t;
+
 /* Private define ------------------------------------------------------------*/
 #define LV_DISP_HOR_RES   480U
 #define LV_DISP_VER_RES   272U
@@ -43,9 +51,13 @@
    my_flush_cb() copies from here into the SDRAM frame buffer at LCD_FB_START_ADDRESS. */
 static uint8_t lv_draw_buf[LV_DISP_HOR_RES * LV_DRAW_BUF_LINES * 4U];
 
-/* Simulated vitals trend chart: written by chart_timer_cb(), created in main(). */
-static lv_obj_t * chart;
-static lv_chart_series_t * chart_series;
+/* Vitals queue: SensorSimTask produces, UITask consumes. Created in main()
+   before either task starts, so both can reference it. */
+static QueueHandle_t vitalsQueue;
+
+/* SensorSimTask's PRNG state - a plain LCG, not newlib's rand()/srand().
+   Seeded once via direct assignment in SensorSimTask, not srand(). */
+static uint32_t prng_seed;
 
 #if 0 /* BMP/FatFS: disabled */
 FATFS SD_FatFs;  /* File system object for SD card logical drive */
@@ -67,7 +79,9 @@ static void CPU_CACHE_Enable(void);
 #if 0 /* "Press me" button: no longer needed once touch was proven working */
 static void btn_event_cb(lv_event_t * e);
 #endif /* "Press me" button: no longer needed once touch was proven working */
-static void chart_timer_cb(lv_timer_t * timer);
+static void UITask(void * pvParameters);
+static void SensorSimTask(void * pvParameters);
+static uint32_t simple_rand(void);
 
 /* Private functions ---------------------------------------------------------*/
 
@@ -78,6 +92,9 @@ static void chart_timer_cb(lv_timer_t * timer);
   */
 int main(void)
 {
+  BSP_LED_Init(LED1);
+
+
 #if 0 /* BMP/FatFS: disabled */
   uint32_t counter = 0, transparency = 0;
   uint8_t str[30];
@@ -107,169 +124,85 @@ int main(void)
   /* Configure LCD */
   LCD_Config();
 
-#if 0 /* BMP/FatFS: disabled */
-  /* Configure SD */
-  BSP_SD_Init();
-
-  while(BSP_SD_IsDetected() != SD_PRESENT)
+  /* Must exist before either task starts - both reference it. */
+  vitalsQueue = xQueueCreate(5, sizeof(vitals_data_t));
+  if (vitalsQueue == NULL)
   {
-        BSP_LCD_SetTextColor(LCD_COLOR_RED);
-        BSP_LCD_DisplayStringAtLine(8, (uint8_t*)"  Please insert SD Card                  ");
+    /* Never checked before now. Distinct from the 5Hz task-creation-failure
+       pattern below: three quick flashes then a pause, repeating, so a
+       queue-creation failure reads as unmistakably different at a glance.
+       HAL_Delay() is safe here, same reasoning as that check: HAL_Init() has
+       already run and vTaskStartScheduler() hasn't been called yet, so
+       SysTick_Handler's unconditional HAL_IncTick() keeps HAL_GetTick()
+       advancing regardless of scheduler state. */
+    for (;;)
+    {
+      for (uint8_t flash = 0; flash < 3; flash++)
+      {
+        BSP_LED_On(LED1);
+        HAL_Delay(80);
+        BSP_LED_Off(LED1);
+        HAL_Delay(80);
+      }
+
+      HAL_Delay(600);
+    }
   }
+
+  /* All LVGL setup and the lv_timer_handler() pump now live in UITask -
+     see below. 2048 words (8KB) is an estimate for LVGL widget
+     creation/rendering headroom, not measured on hardware - tune if it
+     turns out too tight or wastefully large. */
+  xTaskCreate(UITask, "UITask", 2048, NULL, tskIDLE_PRIORITY + 1, NULL);
+
   
-  BSP_LCD_Clear(LCD_COLOR_BLACK);
-  
-  /*##-2- Link the SD Card disk I/O driver ###################################*/
-  if(FATFS_LinkDriver(&SD_Driver, SD_Path) == 0)
+  BaseType_t sensorTaskResult = xTaskCreate(SensorSimTask, "SensorSim", 512, NULL, tskIDLE_PRIORITY + 1, NULL);
+  if (sensorTaskResult != pdPASS)
   {
-    /*##-3- Initialize the Directory Files pointers (heap) ###################*/
-    for (counter = 0; counter < MAX_BMP_FILES; counter++)
+    /* Distinct from Error_Handler()'s steady-on LED and from
+       vApplicationStackOverflowHook()'s interrupts-disabled busy-wait toggle:
+       a fast, HAL_Delay()-timed blink at a known, measurable rate (5Hz).
+       Runs here in main() before the scheduler starts, so HAL_Delay() is
+       still safe - SysTick_Handler unconditionally calls HAL_IncTick()
+       regardless of scheduler state. */
+    for (;;)
     {
-      pDirectoryFiles[counter] = malloc(MAX_BMP_FILE_NAME);
-      if(pDirectoryFiles[counter] == NULL)
-      {
-        /* Set the Text Color */
-        BSP_LCD_SetTextColor(LCD_COLOR_RED);
-        
-        BSP_LCD_DisplayStringAtLine(8, (uint8_t*)"  Cannot allocate memory ");
-        
-        while(1)
-        {
-        }       
-      }
-    }
-    
-    /* Get the BMP file names on root directory */
-    ubNumberOfFiles = Storage_GetDirectoryBitmapFiles("/Media", pDirectoryFiles);
-    
-    if (ubNumberOfFiles == 0)
-    {
-      for (counter = 0; counter < MAX_BMP_FILES; counter++)
-      {
-        free(pDirectoryFiles[counter]);
-      }
-      BSP_LCD_DisplayStringAtLine(8, (uint8_t*)"  No Bitmap files...      ");
-      while(1)
-      {
-      }
+      BSP_LED_Toggle(LED1);
+      HAL_Delay(100);
     }
   }
-  else
+
+  /* TEMPORARY DIAGNOSTIC - remove once the heap budget (configTOTAL_HEAP_SIZE,
+     Inc/FreeRTOSConfig.h) is settled. Reads the actual free-heap value off
+     the hardware via LED blink count, no debugger needed: blinks once per
+     free KB, clear pause between blinks, longer pause before repeating.
+     This loops forever like the other diagnostic blocks above it, so it
+     never reaches vTaskStartScheduler() below - boot halts here on purpose
+     while this is in place. */
+  size_t freeHeapBytes = xPortGetFreeHeapSize();
+  uint32_t freeHeapKB = (uint32_t)((freeHeapBytes + 512U) / 1024U); /* round to nearest KB */
+
+  vTaskStartScheduler();
+
+  /* vTaskStartScheduler() only returns if there isn't enough heap left to
+     create the idle/timer tasks - should never get here. */
+  while (1)
   {
-    /* FatFs Initialization Error */
-    Error_Handler();    
   }
-  while(1)
-  {     
-    counter = 0;
-    
-    while ((counter) < ubNumberOfFiles)
-    {
-      /* Step1 : Display on Foreground layer -------------------------------*/ 
-      /* Format the string */
-      sprintf ((char*)str, "Media/%-11.11s", pDirectoryFiles[counter]);
-      
-      if (Storage_CheckBitmapFile((const char*)str, &uwBmplen) == 0) 
-      {  
-        /* Format the string */        
-        sprintf ((char*)str, "Media/%-11.11s", pDirectoryFiles[counter]);
-        
-        /* Set LCD foreground Layer */
-        BSP_LCD_SelectLayer(1);
-        
-        /* Open a file and copy its content to an internal buffer */
-        Storage_OpenReadFile(uwInternelBuffer, (const char*)str);
-        
-        /* Write bmp file on LCD frame buffer */
-        BSP_LCD_DrawBitmap(0, 0, uwInternelBuffer);  
-        
-        /* Configure the transparency for background layer : Increase the transparency */
-        for (transparency = 0; transparency < 255; (transparency++))
-        {        
-          BSP_LCD_SetTransparency(1, transparency);
-          
-          /* Insert a delay of display */
-          HAL_Delay(2);
-        }
-        
-        /* wait 1s before displaying next picture */
-        HAL_Delay(1000);
-        
-        /* Configure the transparency for foreground layer : decrease the transparency */
-        for (transparency = 255; transparency > 0; transparency--)
-        {        
-          BSP_LCD_SetTransparency(1, transparency);
-          
-          /* Insert a delay of display */
-          HAL_Delay(2);
-        }
+}
 
-        /* Clear the Foreground Layer */ 
-        BSP_LCD_Clear(LCD_COLOR_BLACK);
-        
-        /* Jump to the next image */  
-        counter++;
-        
-        /* Step2 : Display on Background layer -----------------------------*/
-        /* Format the string */  
-        sprintf ((char*)str, "Media/%-11.11s", pDirectoryFiles[counter]);
-        
-        if ((Storage_CheckBitmapFile((const char*)str, &uwBmplen) == 0) || (counter < (ubNumberOfFiles)))
-        {         
-          /* Connect the Output Buffer to LCD Background Layer  */
-          BSP_LCD_SelectLayer(0);
-          
-          /* Format the string */  
-          sprintf ((char*)str, "Media/%-11.11s", pDirectoryFiles[counter]);
-          
-          /* Open a file and copy its content to an internal buffer */
-          Storage_OpenReadFile(uwInternelBuffer, (const char*)str);
-          
-          /* Write bmp file on LCD frame buffer */
-          BSP_LCD_DrawBitmap(0, 0, uwInternelBuffer);
-          
-          /* Configure the transparency for background layer : decrease the transparency */  
-          for (transparency = 0; transparency < 255; (transparency++))
-          {        
-            BSP_LCD_SetTransparency(0, transparency);
-            
-            /* Insert a delay of display */
-            HAL_Delay(2);
-          }
-          
-          /* wait 1s before displaying next picture */
-          HAL_Delay(1000);
-          
-          /* Step3 : -------------------------------------------------------*/              
-          /* Configure the transparency for background layer : Increase the transparency */
-          for (transparency = 255; transparency > 0; transparency--)
-          {        
-            BSP_LCD_SetTransparency(0, transparency);
-            
-            /* Insert a delay of display */
-            HAL_Delay(2);
-          }
-
-          /* Clear the Background Layer */
-          BSP_LCD_Clear(LCD_COLOR_BLACK);
-
-          counter++;   
-        }
-        else if (Storage_CheckBitmapFile((const char*)str, &uwBmplen) == 0)
-        {
-          /* Set the Text Color */
-          BSP_LCD_SetTextColor(LCD_COLOR_RED); 
-          
-          BSP_LCD_DisplayStringAtLine(7, (uint8_t *) str);        
-          BSP_LCD_DisplayStringAtLine(8, (uint8_t*)"    File type not supported. ");
-          while(1)
-          {
-          }
-        }
-      }
-    }
-  }
-#endif /* BMP/FatFS: disabled */
+/**
+  * @brief  FreeRTOS UI task: owns all LVGL state end-to-end - lv_init(),
+  *         display/touch driver registration, theme, widget creation, and
+  *         the lv_timer_handler() pump. LVGL isn't thread-safe by default,
+  *         so keeping every LVGL call confined to this one task avoids
+  *         needing a mutex around it for now.
+  * @param  pvParameters: unused
+  * @retval None (never returns)
+  */
+static void UITask(void * pvParameters)
+{
+  (void)pvParameters;
 
   lv_init();
 
@@ -318,16 +251,17 @@ int main(void)
   lv_label_set_text(spo2_label, "98%");
   lv_obj_align(spo2_label, LV_ALIGN_TOP_MID, 0, 100);
 
-  /* Rolling-window trend chart: simulated data pushed by chart_timer_cb(). */
-  chart = lv_chart_create(lv_screen_active());
+  /* Rolling-window trend chart: fed from vitalsQueue in the loop below,
+     same as hr_label/spo2_label. Only one series exists, so it tracks HR
+     (wider 60-100 range - more visually useful than SpO2's narrow 95-100
+     band would be on a 0-100 y-axis). */
+  lv_obj_t * chart = lv_chart_create(lv_screen_active());
   lv_obj_set_size(chart, 440, 95);
   lv_obj_align(chart, LV_ALIGN_TOP_MID, 0, 165);
   lv_chart_set_type(chart, LV_CHART_TYPE_LINE);
   lv_chart_set_update_mode(chart, LV_CHART_UPDATE_MODE_SHIFT);
   lv_chart_set_point_count(chart, 30);
-  chart_series = lv_chart_add_series(chart, lv_palette_main(LV_PALETTE_RED), LV_CHART_AXIS_PRIMARY_Y);
-
-  lv_timer_create(chart_timer_cb, 500, NULL);
+  lv_chart_series_t * chart_series = lv_chart_add_series(chart, lv_palette_main(LV_PALETTE_RED), LV_CHART_AXIS_PRIMARY_Y);
 
 #if 0 /* "Press me" button: no longer needed once touch was proven working */
   /* v9 renamed lv_btn_create -> lv_button_create */
@@ -338,10 +272,24 @@ int main(void)
   lv_obj_add_event_cb(btn, btn_event_cb, LV_EVENT_CLICKED, btn_label);
 #endif /* "Press me" button: no longer needed once touch was proven working */
 
-  while(1)
+  /* vTaskDelay(), not HAL_Delay(): this now runs as a scheduled task, so it
+     should yield to other tasks between pumps rather than busy-spin. */
+  for (;;)
   {
+    vitals_data_t data;
+
+    /* 0 timeout: a pure poll, never blocks. SensorSimTask only pushes once a
+       second, so most iterations find nothing - that's expected, not an
+       error. Must never stall lv_timer_handler(). */
+    if (xQueueReceive(vitalsQueue, &data, 0) == pdPASS)
+    {
+      lv_label_set_text_fmt(hr_label, "%d BPM", data.hr);
+      lv_label_set_text_fmt(spo2_label, "%d%%", data.spo2);
+      lv_chart_set_next_value(chart, chart_series, data.hr);
+    }
+
     lv_timer_handler();
-    HAL_Delay(5);
+    vTaskDelay(pdMS_TO_TICKS(5));
   }
 }
 
@@ -363,23 +311,74 @@ static void btn_event_cb(lv_event_t * e)
 #endif /* "Press me" button: no longer needed once touch was proven working */
 
 /**
-  * @brief  lv_timer callback (500ms period, registered in main()): pushes a
-  *         simulated sine-wave value into the chart to prove it scrolls.
-  *         Placeholder data source only - not a real vitals signal.
-  * @param  timer: unused
-  * @retval None
+  * @brief  Small linear congruential generator, standalone from newlib's
+  *         rand()/srand(). Avoids relying on newlib's global rand() state
+  *         (shared across all tasks even with configUSE_NEWLIB_REENTRANT,
+  *         since rand()'s internal state isn't part of the per-task _reent
+  *         struct) purely for SensorSimTask's own simulated noise - no
+  *         other task touches prng_seed.
+  * @param  None
+  * @retval Pseudo-random value in [0, 0x7FFF]
   */
-static void chart_timer_cb(lv_timer_t * timer)
+static uint32_t simple_rand(void)
 {
-  static float angle = 0.0f;
-  int32_t value;
+  prng_seed = prng_seed * 1103515245U + 12345U;
+  return (prng_seed >> 16) & 0x7FFF;
+}
 
-  (void)timer;
+/**
+  * @brief  FreeRTOS sensor-simulator task: generates HR (60-100 BPM) and
+  *         SpO2 (95-100%) via a clamped random walk (small +-1/+-2 steps
+  *         each cycle, not fully independent random jumps) so the values
+  *         read as a plausible noisy signal rather than white noise.
+  *         Pushes to vitalsQueue about once a second.
+  * @param  pvParameters: unused
+  * @retval None (never returns)
+  */
+static void SensorSimTask(void * pvParameters)
+{
+  vitals_data_t data;
+  int8_t step;
 
-  value = 50 + (int32_t)(20.0f * sinf(angle));
-  angle += 0.3f;
+  (void)pvParameters;
 
-  lv_chart_set_next_value(chart, chart_series, value);
+  data.hr = 75;
+  data.spo2 = 98;
+  prng_seed = HAL_GetTick(); /* plain assignment, not srand() */
+  for (;;)
+  {
+    /* Loop-iteration sanity check: toggles unconditionally every pass,
+       before any delay/queue logic, so it's visible proof the loop itself
+       is actually repeating rather than stalling after one pass. */
+    BSP_LED_Toggle(LED1);
+
+
+    step = (int8_t)((simple_rand() % 5) - 2); /* -2..+2 */
+    if ((data.hr + step) >= 60 && (data.hr + step) <= 100)
+    {
+      data.hr = (uint8_t)(data.hr + step);
+    }
+
+    step = (int8_t)((simple_rand() % 3) - 1); /* -1..+1 */
+    if ((data.spo2 + step) >= 95 && (data.spo2 + step) <= 100)
+    {
+      data.spo2 = (uint8_t)(data.spo2 + step);
+    }
+
+    if (xQueueSend(vitalsQueue, &data, 0) == pdPASS)
+    {
+      /* Debug signal for a successful send - separate from every other LED
+         usage in this project (Error_Handler()'s steady-on, the stack-overflow
+         hook's interrupts-disabled busy-wait toggle, main()'s 5Hz
+         task-creation-failure blink): a single brief flash, distinct from
+         all three. Same LED1, since this board's BSP only exposes one. */
+      BSP_LED_On(LED1);
+      vTaskDelay(pdMS_TO_TICKS(20));
+      BSP_LED_Off(LED1);
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(1000));
+  }
 }
 
 /**

@@ -34,6 +34,7 @@
 
 void NMI_Handler(void);
 void HardFault_Handler(void);
+void Fault_LED_Blink(void);
 void MemManage_Handler(void);
 void BusFault_Handler(void);
 void UsageFault_Handler(void);
