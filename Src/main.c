@@ -23,6 +23,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
+#include <stdbool.h>
 
 /** @addtogroup STM32F7xx_HAL_Applications
   * @{
@@ -55,6 +56,42 @@ static uint8_t lv_draw_buf[LV_DISP_HOR_RES * LV_DRAW_BUF_LINES * 4U];
    before either task starts, so both can reference it. */
 static QueueHandle_t vitalsQueue;
 
+/* Depth-1 "latest value" mailbox: SensorSimTask overwrites this on every
+   cycle via xQueueOverwrite(), separate from vitalsQueue's history.
+   SafetyMonitorTask peeks this - only ever needs the most recent reading,
+   not a backlog. */
+static QueueHandle_t safetyVitalsQueue;
+
+/* Liveness counters: incremented once per loop iteration by their own task,
+   nothing else. Read by SafetyMonitorTask (see safetyFaultLiveness below).
+   volatile since they're written by one task and read by another; a single
+   aligned 32-bit load/store is atomic on Cortex-M7, so no critical section
+   is needed just to read the current value. */
+static volatile uint32_t uiTaskLiveCounter;
+static volatile uint32_t sensorTaskLiveCounter;
+
+/* Set by SafetyMonitorTask when a reading fails basic plausibility (not a
+   real diagnosis - just "this couldn't be a real physiological value, treat
+   the sensor/link as suspect"). Latches: nothing currently clears it back
+   to false once set. */
+static volatile bool safetyFaultPlausibility;
+
+/* Set by SafetyMonitorTask when uiTaskLiveCounter or sensorTaskLiveCounter
+   hasn't advanced since the previous check - that task's loop has stalled.
+   safetyFaultLivenessMask records which one(s), as a bitmask of the
+   SAFETY_LIVENESS_FAULT_* bits below. Both latch, same as
+   safetyFaultPlausibility: neither is cleared once set, even if the task
+   in question resumes later. */
+#define SAFETY_LIVENESS_FAULT_UITASK     (1U << 0)
+#define SAFETY_LIVENESS_FAULT_SENSORTASK (1U << 1)
+static volatile bool safetyFaultLiveness;
+static volatile uint8_t safetyFaultLivenessMask;
+
+/* Initialized once in main() (right before vTaskStartScheduler() - see why
+   there specifically, not earlier, in main()), refreshed from
+   SafetyMonitorTask. File-scope since both need the same handle. */
+static IWDG_HandleTypeDef hiwdg;
+
 /* SensorSimTask's PRNG state - a plain LCG, not newlib's rand()/srand().
    Seeded once via direct assignment in SensorSimTask, not srand(). */
 static uint32_t prng_seed;
@@ -81,7 +118,10 @@ static void btn_event_cb(lv_event_t * e);
 #endif /* "Press me" button: no longer needed once touch was proven working */
 static void UITask(void * pvParameters);
 static void SensorSimTask(void * pvParameters);
+static void SafetyMonitorTask(void * pvParameters);
 static uint32_t simple_rand(void);
+static void queue_creation_failed_blink(void);
+static void task_creation_failed_blink(void);
 
 /* Private functions ---------------------------------------------------------*/
 
@@ -128,25 +168,17 @@ int main(void)
   vitalsQueue = xQueueCreate(5, sizeof(vitals_data_t));
   if (vitalsQueue == NULL)
   {
-    /* Never checked before now. Distinct from the 5Hz task-creation-failure
-       pattern below: three quick flashes then a pause, repeating, so a
-       queue-creation failure reads as unmistakably different at a glance.
-       HAL_Delay() is safe here, same reasoning as that check: HAL_Init() has
-       already run and vTaskStartScheduler() hasn't been called yet, so
-       SysTick_Handler's unconditional HAL_IncTick() keeps HAL_GetTick()
-       advancing regardless of scheduler state. */
-    for (;;)
-    {
-      for (uint8_t flash = 0; flash < 3; flash++)
-      {
-        BSP_LED_On(LED1);
-        HAL_Delay(80);
-        BSP_LED_Off(LED1);
-        HAL_Delay(80);
-      }
+    queue_creation_failed_blink();
+  }
 
-      HAL_Delay(600);
-    }
+  /* Depth 1: SafetyMonitorTask only ever needs the latest reading, so
+     SensorSimTask writes here via xQueueOverwrite() instead of xQueueSend()
+     - see FreeRTOS's own queue.h docs, which explicitly recommend depth-1
+     queues for this "mailbox" pattern. */
+  safetyVitalsQueue = xQueueCreate(1, sizeof(vitals_data_t));
+  if (safetyVitalsQueue == NULL)
+  {
+    queue_creation_failed_blink();
   }
 
   /* All LVGL setup and the lv_timer_handler() pump now live in UITask -
@@ -159,28 +191,48 @@ int main(void)
   BaseType_t sensorTaskResult = xTaskCreate(SensorSimTask, "SensorSim", 512, NULL, tskIDLE_PRIORITY + 1, NULL);
   if (sensorTaskResult != pdPASS)
   {
-    /* Distinct from Error_Handler()'s steady-on LED and from
-       vApplicationStackOverflowHook()'s interrupts-disabled busy-wait toggle:
-       a fast, HAL_Delay()-timed blink at a known, measurable rate (5Hz).
-       Runs here in main() before the scheduler starts, so HAL_Delay() is
-       still safe - SysTick_Handler unconditionally calls HAL_IncTick()
-       regardless of scheduler state. */
-    for (;;)
-    {
-      BSP_LED_Toggle(LED1);
-      HAL_Delay(100);
-    }
+    task_creation_failed_blink();
   }
 
-  /* TEMPORARY DIAGNOSTIC - remove once the heap budget (configTOTAL_HEAP_SIZE,
-     Inc/FreeRTOSConfig.h) is settled. Reads the actual free-heap value off
-     the hardware via LED blink count, no debugger needed: blinks once per
-     free KB, clear pause between blinks, longer pause before repeating.
-     This loops forever like the other diagnostic blocks above it, so it
-     never reaches vTaskStartScheduler() below - boot halts here on purpose
-     while this is in place. */
+  /* Higher priority than UITask/SensorSimTask (tskIDLE_PRIORITY + 1): once
+     the real checks are added, this needs to preempt both promptly rather
+     than wait its turn. For now just reads the latest vitals snapshot once
+     a second - see SafetyMonitorTask() below, no actual checks yet. */
+  BaseType_t safetyTaskResult = xTaskCreate(SafetyMonitorTask, "SafetyMonitor", configMINIMAL_STACK_SIZE, NULL, tskIDLE_PRIORITY + 2, NULL);
+  if (safetyTaskResult != pdPASS)
+  {
+    task_creation_failed_blink();
+  }
+
+  /* Computed but no longer displayed via blink loop (that loop was removed
+     here since this was last touched) - falls straight through below.
+     freeHeapKB is presently unused; keep or wire back up as needed. */
   size_t freeHeapBytes = xPortGetFreeHeapSize();
   uint32_t freeHeapKB = (uint32_t)((freeHeapBytes + 512U) / 1024U); /* round to nearest KB */
+
+  /* Deliberately placed here - after every earlier failure check above, not
+     alongside other hardware init earlier in main() - because HAL_IWDG_Init()
+     arms the watchdog immediately (it calls __HAL_IWDG_START() internally)
+     and, unlike other STM32 peripherals, it CANNOT be stopped again short of
+     a reset. If it were armed any earlier, a genuine queue/task-creation
+     failure above would run its intentional infinite blink loop straight
+     through the timeout and reset mid-pattern - corrupting the very failure
+     signal those loops exist to show reliably, and looping the board through
+     repeated resets instead of latching in a stable diagnostic state. */
+  hiwdg.Instance = IWDG;
+  hiwdg.Init.Prescaler = IWDG_PRESCALER_64;
+  /* (64 * (1999+1)) / 32000 Hz nominal LSI = 4.0s. LSI is an uncalibrated
+     RC oscillator - actual frequency can vary roughly 17-47kHz chip-to-chip
+     per the datasheet, not just the 32kHz nominal, so real timeout could
+     range from ~2.7s (fastest LSI) to ~7.5s (slowest) - not a precise 4.0s
+     on real hardware. Even worst-case fast end is still comfortably above
+     SafetyMonitorTask's 1s period, which is what matters here. */
+  hiwdg.Init.Reload = 1999;
+  hiwdg.Init.Window = IWDG_WINDOW_DISABLE;
+  if (HAL_IWDG_Init(&hiwdg) != HAL_OK)
+  {
+    task_creation_failed_blink(); /* reuse: same "init failed" signal */
+  }
 
   vTaskStartScheduler();
 
@@ -277,6 +329,7 @@ static void UITask(void * pvParameters)
   for (;;)
   {
     vitals_data_t data;
+    uiTaskLiveCounter++;
 
     /* 0 timeout: a pure poll, never blocks. SensorSimTask only pushes once a
        second, so most iterations find nothing - that's expected, not an
@@ -309,6 +362,58 @@ static void btn_event_cb(lv_event_t * e)
   lv_label_set_text(target_label, pressed ? "Pressed!" : "Press me");
 }
 #endif /* "Press me" button: no longer needed once touch was proven working */
+
+/**
+  * @brief  Shared by every queue-creation-failure check in main() (currently
+  *         vitalsQueue and safetyVitalsQueue), so they're guaranteed
+  *         identical instead of copy-pasted loops that could drift apart.
+  *         Three quick flashes then a pause, repeating - distinct from the
+  *         5Hz task-creation-failure blink. HAL_Delay() is safe here:
+  *         HAL_Init() has already run and vTaskStartScheduler() hasn't been
+  *         called yet, so SysTick_Handler's unconditional HAL_IncTick()
+  *         keeps HAL_GetTick() advancing regardless of scheduler state.
+  * @param  None
+  * @retval None (never returns)
+  */
+static void queue_creation_failed_blink(void)
+{
+  for (;;)
+  {
+    for (uint8_t flash = 0; flash < 3; flash++)
+    {
+      BSP_LED_On(LED1);
+      HAL_Delay(80);
+      BSP_LED_Off(LED1);
+      HAL_Delay(80);
+    }
+
+    HAL_Delay(600);
+  }
+}
+
+/**
+  * @brief  Shared by every task-creation-failure check in main() (currently
+  *         SensorSimTask and SafetyMonitorTask), so they're guaranteed
+  *         identical instead of copy-pasted loops that could drift apart.
+  *         A fast, steady 5Hz toggle - distinct from
+  *         queue_creation_failed_blink()'s three-flashes-then-pause pattern,
+  *         from Error_Handler()'s steady-on LED, and from
+  *         vApplicationStackOverflowHook()'s interrupts-disabled busy-wait
+  *         toggle. HAL_Delay() is safe here: HAL_Init() has already run and
+  *         vTaskStartScheduler() hasn't been called yet, so SysTick_Handler's
+  *         unconditional HAL_IncTick() keeps HAL_GetTick() advancing
+  *         regardless of scheduler state.
+  * @param  None
+  * @retval None (never returns)
+  */
+static void task_creation_failed_blink(void)
+{
+  for (;;)
+  {
+    BSP_LED_Toggle(LED1);
+    HAL_Delay(100);
+  }
+}
 
 /**
   * @brief  Small linear congruential generator, standalone from newlib's
@@ -347,6 +452,8 @@ static void SensorSimTask(void * pvParameters)
   prng_seed = HAL_GetTick(); /* plain assignment, not srand() */
   for (;;)
   {
+    sensorTaskLiveCounter++;
+
     /* Loop-iteration sanity check: toggles unconditionally every pass,
        before any delay/queue logic, so it's visible proof the loop itself
        is actually repeating rather than stalling after one pass. */
@@ -365,6 +472,12 @@ static void SensorSimTask(void * pvParameters)
       data.spo2 = (uint8_t)(data.spo2 + step);
     }
 
+    /* Latest-value mailbox for the future SafetyMonitorTask, separate from
+       vitalsQueue's history below. xQueueOverwrite() always succeeds (it's
+       documented to only ever return pdPASS) so there's no failure branch
+       to check here the way xQueueSend()'s pdPASS/pdFALSE is checked. */
+    xQueueOverwrite(safetyVitalsQueue, &data);
+
     if (xQueueSend(vitalsQueue, &data, 0) == pdPASS)
     {
       /* Debug signal for a successful send - separate from every other LED
@@ -375,6 +488,101 @@ static void SensorSimTask(void * pvParameters)
       BSP_LED_On(LED1);
       vTaskDelay(pdMS_TO_TICKS(20));
       BSP_LED_Off(LED1);
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(1000));
+  }
+}
+
+/**
+  * @brief  FreeRTOS safety-monitor task. Runs at a higher priority than
+  *         UITask/SensorSimTask (tskIDLE_PRIORITY + 2) so it can preempt
+  *         both promptly. Once a second: reads the latest vitals snapshot
+  *         and runs a basic plausibility check on it (HR 30-220, SpO2
+  *         0-100), setting safetyFaultPlausibility on failure; and checks
+  *         uiTaskLiveCounter/sensorTaskLiveCounter against their previous
+  *         values, setting safetyFaultLiveness (+ safetyFaultLivenessMask,
+  *         recording which task) if either hasn't advanced since the last
+  *         check. Neither check is a real diagnosis or response - just
+  *         detection, nothing beyond that yet.
+  * @param  pvParameters: unused
+  * @retval None (never returns)
+  */
+static void SafetyMonitorTask(void * pvParameters)
+{
+  vitals_data_t snapshot;
+
+  (void)pvParameters;
+
+  for (;;)
+  {
+    /* Peek, not receive: safetyVitalsQueue is a depth-1 mailbox that should
+       always hold the latest value, not be drained by reading it - the next
+       xQueueOverwrite() replaces it regardless. 0 timeout: don't block if
+       SensorSimTask hasn't written yet (e.g. the very first second after
+       boot, before its first cycle completes). */
+    if (xQueuePeek(safetyVitalsQueue, &snapshot, 0) == pdPASS)
+    {
+      /* Basic plausibility check, not a real diagnosis: readings outside
+         these bounds can't be genuine physiology, so flag the sensor/link
+         as suspect. spo2 is uint8_t (unsigned) - "0-100" from the spec
+         reduces to just the ">100" half here, since "< 0" can never be
+         true for an unsigned type (and would warn under -Wall if written
+         anyway). */
+      if (snapshot.hr < 30 || snapshot.hr > 220 || snapshot.spo2 > 100)
+      {
+        safetyFaultPlausibility = true;
+      }
+
+      /* Set a breakpoint on the next line to inspect `snapshot` - or wire up
+         real logging once a UART/printf path exists in this project (none
+         does yet). */
+      //__NOP();
+      BSP_LED_Toggle(LED1);
+    }
+
+    /* Liveness check: independent of whether safetyVitalsQueue had data
+       above, so it runs every cycle regardless. Compares against the
+       PREVIOUS check's values (task-local statics, per instructions) - if
+       a counter hasn't moved since last time, that task's loop has stalled.
+       firstCheck guards the very first pass: with SafetyMonitorTask at the
+       highest priority of the three, it runs before UITask/SensorSimTask
+       have executed even once, so both counters would read 0 == 0 on that
+       first comparison - a guaranteed false stall report, not a real one -
+       if it weren't skipped. */
+    static uint32_t lastUiCount = 0;
+    static uint32_t lastSensorCount = 0;
+    static bool firstCheck = true;
+    uint32_t currentUiCount = uiTaskLiveCounter;
+    uint32_t currentSensorCount = sensorTaskLiveCounter;
+
+    if (!firstCheck)
+    {
+      if (currentUiCount == lastUiCount)
+      {
+        safetyFaultLiveness = true;
+        safetyFaultLivenessMask |= SAFETY_LIVENESS_FAULT_UITASK;
+      }
+
+      if (currentSensorCount == lastSensorCount)
+      {
+        safetyFaultLiveness = true;
+        safetyFaultLivenessMask |= SAFETY_LIVENESS_FAULT_SENSORTASK;
+      }
+    }
+
+    firstCheck = false;
+    lastUiCount = currentUiCount;
+    lastSensorCount = currentSensorCount;
+
+    /* Only refresh if NEITHER fault is currently latched. Both flags only
+       ever get set to true (see their declarations) - once either fires,
+       refreshes stop unconditionally and stay stopped, so the IWDG resets
+       the board ~4s later rather than this task quietly feeding the
+       watchdog forever with a known-bad system underneath it. */
+    if (!safetyFaultPlausibility && !safetyFaultLiveness)
+    {
+      HAL_IWDG_Refresh(&hiwdg);
     }
 
     vTaskDelay(pdMS_TO_TICKS(1000));
