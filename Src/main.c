@@ -70,6 +70,14 @@ static QueueHandle_t safetyVitalsQueue;
 static volatile uint32_t uiTaskLiveCounter;
 static volatile uint32_t sensorTaskLiveCounter;
 
+/* TEMPORARY DIAGNOSTIC - remove once lv_timer_handler() timing is
+   characterized. Worst-case duration ever observed, in ms, of a single
+   lv_timer_handler() call in UITask - only updated when a call exceeds
+   200ms AND is worse than anything seen before, so this always holds the
+   true peak, not just the most recent breach. Inspect via breakpoint or
+   watch expression, per instructions - nothing else reads this. */
+static volatile uint32_t uiTaskTimerHandlerPeakMs;
+
 /* Set by SafetyMonitorTask when a reading fails basic plausibility (not a
    real diagnosis - just "this couldn't be a real physiological value, treat
    the sensor/link as suspect"). Latches: nothing currently clears it back
@@ -341,7 +349,23 @@ static void UITask(void * pvParameters)
       lv_chart_set_next_value(chart, chart_series, data.hr);
     }
 
+    /* TEMPORARY DIAGNOSTIC - remove alongside uiTaskTimerHandlerPeakMs once
+       lv_timer_handler() timing is characterized. */
+    uint32_t timerHandlerStartMs = HAL_GetTick();
     lv_timer_handler();
+    uint32_t timerHandlerElapsedMs = HAL_GetTick() - timerHandlerStartMs;
+    if (timerHandlerElapsedMs > 200U && timerHandlerElapsedMs > uiTaskTimerHandlerPeakMs)
+    {
+      uiTaskTimerHandlerPeakMs = timerHandlerElapsedMs;
+    }
+
+    if(uiTaskTimerHandlerPeakMs >= 1000U)
+    {
+      /* TEMPORARY DIAGNOSTIC - remove alongside uiTaskTimerHandlerPeakMs once
+         lv_timer_handler() timing is characterized. */
+      BSP_LED_Toggle(LED1);
+    }
+
     vTaskDelay(pdMS_TO_TICKS(5));
   }
 }
@@ -457,7 +481,7 @@ static void SensorSimTask(void * pvParameters)
     /* Loop-iteration sanity check: toggles unconditionally every pass,
        before any delay/queue logic, so it's visible proof the loop itself
        is actually repeating rather than stalling after one pass. */
-    BSP_LED_Toggle(LED1);
+    // BSP_LED_Toggle(LED1);
 
 
     step = (int8_t)((simple_rand() % 5) - 2); /* -2..+2 */
