@@ -1,0 +1,1 @@
+{"nodes": [{"id": "$graphify-root$_middlewares_third_party_lvgl_src_drivers_display_ft81x_lv_ft81x_defines_h", "label": "lv_ft81x_defines.h", "file_type": "code", "source_file": "Middlewares/Third_Party/LVGL/src/drivers/display/ft81x/lv_ft81x_defines.h", "source_location": "L1"}], "edges": [], "raw_calls": [], "parse_errors": {"first_error_line": 842, "multiline_error": false}}

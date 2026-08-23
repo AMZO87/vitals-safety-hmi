@@ -80,10 +80,15 @@ EndDependencies */
 
 /** @defgroup STM32F7508_DISCOVERY_TS_Private_Defines STM32F7508_DISCOVERY_TS Types Defines
   * @{
-  */ 
+  */
+/* FT5336_MAX_DETECTABLE_TOUCH (5, via TS_MAX_NB_TOUCH) is the controller's
+   theoretical ceiling, not a realistic reading for this board/panel, which
+   supports at most 2 simultaneous touches. A DetectTouch() count above this
+   is treated as a sensor glitch rather than trusted. */
+#define TS_PLAUSIBLE_MAX_TOUCH          2U
 /**
   * @}
-  */ 
+  */
 
 /** @defgroup STM32F7508_DISCOVERY_TS_Private_Macros STM32F7508_DISCOVERY_TS Private Macros
   * @{
@@ -224,7 +229,19 @@ uint8_t BSP_TS_GetState(TS_StateTypeDef *TS_State)
 
   /* Check and update the number of touches active detected */
   TS_State->touchDetected = tsDriver->DetectTouch(I2cAddress);
-  
+
+  /* Sanity-check the reported count before trusting it into the GetXY loop
+     below: each extra touch index costs 4 more I2C transactions
+     (TS_IO_Read for XL/XH/YL/YH). A count above what this board can
+     physically report is a glitch, not real touches - discard it here
+     rather than issuing up to FT5336_MAX_DETECTABLE_TOUCH * 4 (20) reads
+     against bogus data. */
+  if(TS_State->touchDetected > TS_PLAUSIBLE_MAX_TOUCH)
+  {
+    TS_State->touchDetected = 0;
+    return TS_ERROR;
+  }
+
   if(TS_State->touchDetected)
   {
     for(index=0; index < TS_State->touchDetected; index++)

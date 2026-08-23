@@ -62,6 +62,18 @@ static QueueHandle_t vitalsQueue;
    not a backlog. */
 static QueueHandle_t safetyVitalsQueue;
 
+/* UITask's handle, captured from xTaskCreate() below instead of discarded
+   as NULL, so SafetyMonitorTask can reference it directly if a future check
+   needs to (e.g. vTaskGetInfo() for a liveness or stack check beyond the
+   uiTaskLiveCounter polling already in place - the one prior use,
+   eTaskGetState(), was a TEMPORARY DIAGNOSTIC that's since been removed).
+   Both tasks are defined in this file, so plain static file-scope linkage
+   is enough - no extern needed. SensorSimTask's and SafetyMonitorTask's own
+   handles were captured the same way at one point but had no remaining
+   reader once their own eTaskGetState() diagnostic was removed, so those
+   two were dropped back to NULL at their xTaskCreate() call sites. */
+static TaskHandle_t uiTaskHandle;
+
 /* Liveness counters: incremented once per loop iteration by their own task,
    nothing else. Read by SafetyMonitorTask (see safetyFaultLiveness below).
    volatile since they're written by one task and read by another; a single
@@ -70,13 +82,17 @@ static QueueHandle_t safetyVitalsQueue;
 static volatile uint32_t uiTaskLiveCounter;
 static volatile uint32_t sensorTaskLiveCounter;
 
-/* TEMPORARY DIAGNOSTIC - remove once lv_timer_handler() timing is
-   characterized. Worst-case duration ever observed, in ms, of a single
-   lv_timer_handler() call in UITask - only updated when a call exceeds
-   200ms AND is worse than anything seen before, so this always holds the
-   true peak, not just the most recent breach. Inspect via breakpoint or
-   watch expression, per instructions - nothing else reads this. */
-static volatile uint32_t uiTaskTimerHandlerPeakMs;
+/* TEMPORARY DIAGNOSTIC - remove once stack sizing is confirmed adequate.
+   uxTaskGetStackHighWaterMark(NULL) already returns the minimum-ever-free
+   stack (in words) for the calling task since it started, tracked
+   internally by FreeRTOS via the same stack-painting mechanism
+   configCHECK_FOR_STACK_OVERFLOW == 2 uses - so simply overwriting each
+   variable on every loop pass is enough; the value itself is already the
+   running historical minimum, no peak-tracking logic needed. Inspect via
+   breakpoint or Live Watch, per instructions. */
+static volatile UBaseType_t uiTaskStackHighWaterMark;
+static volatile UBaseType_t sensorTaskStackHighWaterMark;
+static volatile UBaseType_t safetyTaskStackHighWaterMark;
 
 /* Set by SafetyMonitorTask when a reading fails basic plausibility (not a
    real diagnosis - just "this couldn't be a real physiological value, treat
@@ -193,7 +209,7 @@ int main(void)
      see below. 2048 words (8KB) is an estimate for LVGL widget
      creation/rendering headroom, not measured on hardware - tune if it
      turns out too tight or wastefully large. */
-  xTaskCreate(UITask, "UITask", 2048, NULL, tskIDLE_PRIORITY + 1, NULL);
+  xTaskCreate(UITask, "UITask", 2048, NULL, tskIDLE_PRIORITY + 1, &uiTaskHandle);
 
   
   BaseType_t sensorTaskResult = xTaskCreate(SensorSimTask, "SensorSim", 512, NULL, tskIDLE_PRIORITY + 1, NULL);
@@ -206,7 +222,7 @@ int main(void)
      the real checks are added, this needs to preempt both promptly rather
      than wait its turn. For now just reads the latest vitals snapshot once
      a second - see SafetyMonitorTask() below, no actual checks yet. */
-  BaseType_t safetyTaskResult = xTaskCreate(SafetyMonitorTask, "SafetyMonitor", configMINIMAL_STACK_SIZE, NULL, tskIDLE_PRIORITY + 2, NULL);
+  BaseType_t safetyTaskResult = xTaskCreate(SafetyMonitorTask, "SafetyMonitor", 512, NULL, tskIDLE_PRIORITY + 2, NULL);
   if (safetyTaskResult != pdPASS)
   {
     task_creation_failed_blink();
@@ -288,8 +304,10 @@ static void UITask(void * pvParameters)
   lv_theme_t * theme = lv_theme_default_init(disp, theme_color, theme_color, true, LV_FONT_DEFAULT);
   lv_display_set_theme(disp, theme);
 
-  /* Status banner: hardcoded green/NORMAL for now - Phase 5 wires this to
-     actual fault detection. */
+  /* Status banner: green/NORMAL vs red/FAULT is driven live from
+     safetyFaultPlausibility/safetyFaultLiveness in the loop below - these
+     initial colors/text are just the pre-first-iteration default (matches
+     the "no fault yet" state, since both flags start false). */
   lv_obj_t * status_banner = lv_obj_create(lv_screen_active());
   lv_obj_set_size(status_banner, LV_DISP_HOR_RES, 34);
   lv_obj_align(status_banner, LV_ALIGN_TOP_MID, 0, 0);
@@ -298,13 +316,28 @@ static void UITask(void * pvParameters)
   lv_obj_set_style_bg_opa(status_banner, LV_OPA_COVER, 0);
 
   lv_obj_t * status_label = lv_label_create(status_banner);
-  lv_label_set_text(status_label, LV_SYMBOL_WARNING " NORMAL");
+  lv_label_set_text(status_label, LV_SYMBOL_OK " NORMAL");
   lv_obj_center(status_label);
 
   lv_obj_t * hr_label = lv_label_create(lv_screen_active());
   lv_obj_set_style_text_font(hr_label, &lv_font_montserrat_48, 0);
   lv_label_set_text(hr_label, "72 BPM");
   lv_obj_align(hr_label, LV_ALIGN_TOP_MID, 0, 42);
+
+  /* Section-header-style caption for spo2_label: unlike hr_label's "BPM"
+     suffix (unambiguously heart rate on its own), a bare "%" doesn't say
+     what it's a percentage OF, so this pairing needs the label. No
+     lv_obj_set_style_text_font() call, same as uptime_label, so it stays at
+     the theme's small default font rather than spo2_label's 48px
+     Montserrat. Positioned to spo2_label's left rather than above it -
+     hr_label and spo2_label are stacked close enough (42px/100px offsets)
+     that a caption squeezed above spo2_label would crowd hr_label's own
+     numeral. Offsets are estimated against spo2_label's expected position/
+     size, not measured on hardware - nudge if the pairing doesn't read
+     cleanly on the actual panel. */
+  lv_obj_t * spo2_caption = lv_label_create(lv_screen_active());
+  lv_label_set_text(spo2_caption, "SpO2");
+  lv_obj_align(spo2_caption, LV_ALIGN_TOP_MID, -70, 119);
 
   lv_obj_t * spo2_label = lv_label_create(lv_screen_active());
   lv_obj_set_style_text_font(spo2_label, &lv_font_montserrat_48, 0);
@@ -320,8 +353,15 @@ static void UITask(void * pvParameters)
   lv_obj_align(chart, LV_ALIGN_TOP_MID, 0, 165);
   lv_chart_set_type(chart, LV_CHART_TYPE_LINE);
   lv_chart_set_update_mode(chart, LV_CHART_UPDATE_MODE_SHIFT);
-  lv_chart_set_point_count(chart, 30);
+  lv_chart_set_point_count(chart, 5);
   lv_chart_series_t * chart_series = lv_chart_add_series(chart, lv_palette_main(LV_PALETTE_RED), LV_CHART_AXIS_PRIMARY_Y);
+
+  /* Uptime readout: unobtrusive corner, no lv_obj_set_style_text_font() call
+     so it stays at the theme's small default font rather than the 48px
+     Montserrat used for hr_label/spo2_label. Updated in the loop below. */
+  lv_obj_t * uptime_label = lv_label_create(lv_screen_active());
+  lv_obj_align(uptime_label, LV_ALIGN_BOTTOM_RIGHT, -4, -4);
+  lv_label_set_text(uptime_label, "00:00:00");
 
 #if 0 /* "Press me" button: no longer needed once touch was proven working */
   /* v9 renamed lv_btn_create -> lv_button_create */
@@ -341,30 +381,48 @@ static void UITask(void * pvParameters)
 
     /* 0 timeout: a pure poll, never blocks. SensorSimTask only pushes once a
        second, so most iterations find nothing - that's expected, not an
-       error. Must never stall lv_timer_handler(). */
+       error. Must never stall lv_timer_handler(). Uptime piggybacks on this
+       same once-a-second trigger (per instructions: reuse this cadence
+       rather than add a separate timer/tick comparison for it) instead of
+       tracking its own "has a second passed" state. */
     if (xQueueReceive(vitalsQueue, &data, 0) == pdPASS)
     {
       lv_label_set_text_fmt(hr_label, "%d BPM", data.hr);
       lv_label_set_text_fmt(spo2_label, "%d%%", data.spo2);
       lv_chart_set_next_value(chart, chart_series, data.hr);
+
+      uint32_t uptimeSec = HAL_GetTick() / 1000U;
+      uint32_t h = uptimeSec / 3600U;
+      uint32_t m = (uptimeSec % 3600U) / 60U;
+      uint32_t s = uptimeSec % 60U;
+      lv_label_set_text_fmt(uptime_label, "%02lu:%02lu:%02lu",
+                             (unsigned long)h, (unsigned long)m, (unsigned long)s);
     }
 
-    /* TEMPORARY DIAGNOSTIC - remove alongside uiTaskTimerHandlerPeakMs once
-       lv_timer_handler() timing is characterized. */
-    uint32_t timerHandlerStartMs = HAL_GetTick();
+    /* Status banner: read every iteration, not just when new vitals data
+       arrives - a fault can latch (SafetyMonitorTask) independent of the
+       vitals queue's ~1Hz cadence, and this shouldn't wait for the next
+       reading to show up. "FAULT" rather than "CRITICAL": neither flag is a
+       real clinical diagnosis (see their own declaring comments -
+       plausibility is "couldn't be a real physiological value", liveness is
+       "that task's loop has stalled") - "CRITICAL" would overstate what's
+       actually been detected. */
+    if (safetyFaultPlausibility || safetyFaultLiveness)
+    {
+      lv_obj_set_style_bg_color(status_banner, lv_palette_main(LV_PALETTE_RED), 0);
+      lv_label_set_text(status_label, LV_SYMBOL_WARNING " FAULT");
+    }
+    else
+    {
+      lv_obj_set_style_bg_color(status_banner, lv_palette_main(LV_PALETTE_GREEN), 0);
+      lv_label_set_text(status_label, LV_SYMBOL_OK " NORMAL");
+    }
+
     lv_timer_handler();
-    uint32_t timerHandlerElapsedMs = HAL_GetTick() - timerHandlerStartMs;
-    if (timerHandlerElapsedMs > 200U && timerHandlerElapsedMs > uiTaskTimerHandlerPeakMs)
-    {
-      uiTaskTimerHandlerPeakMs = timerHandlerElapsedMs;
-    }
 
-    if(uiTaskTimerHandlerPeakMs >= 1000U)
-    {
-      /* TEMPORARY DIAGNOSTIC - remove alongside uiTaskTimerHandlerPeakMs once
-         lv_timer_handler() timing is characterized. */
-      BSP_LED_Toggle(LED1);
-    }
+    /* TEMPORARY DIAGNOSTIC - remove alongside uiTaskStackHighWaterMark once
+       stack sizing is confirmed adequate. */
+    uiTaskStackHighWaterMark = uxTaskGetStackHighWaterMark(NULL);
 
     vTaskDelay(pdMS_TO_TICKS(5));
   }
@@ -483,7 +541,6 @@ static void SensorSimTask(void * pvParameters)
        is actually repeating rather than stalling after one pass. */
     // BSP_LED_Toggle(LED1);
 
-
     step = (int8_t)((simple_rand() % 5) - 2); /* -2..+2 */
     if ((data.hr + step) >= 60 && (data.hr + step) <= 100)
     {
@@ -514,6 +571,10 @@ static void SensorSimTask(void * pvParameters)
       BSP_LED_Off(LED1);
     }
 
+    /* TEMPORARY DIAGNOSTIC - remove alongside sensorTaskStackHighWaterMark
+       once stack sizing is confirmed adequate. */
+    sensorTaskStackHighWaterMark = uxTaskGetStackHighWaterMark(NULL);
+
     vTaskDelay(pdMS_TO_TICKS(1000));
   }
 }
@@ -526,8 +587,10 @@ static void SensorSimTask(void * pvParameters)
   *         0-100), setting safetyFaultPlausibility on failure; and checks
   *         uiTaskLiveCounter/sensorTaskLiveCounter against their previous
   *         values, setting safetyFaultLiveness (+ safetyFaultLivenessMask,
-  *         recording which task) if either hasn't advanced since the last
-  *         check. Neither check is a real diagnosis or response - just
+  *         recording which task) if either hasn't advanced across TWO
+  *         CONSECUTIVE checks (a one-cycle tolerance, ~2s) rather than
+  *         latching on the very first miss - see the miss-streak counters
+  *         below. Neither check is a real diagnosis or response - just
   *         detection, nothing beyond that yet.
   * @param  pvParameters: unused
   * @retval None (never returns)
@@ -573,10 +636,23 @@ static void SafetyMonitorTask(void * pvParameters)
        highest priority of the three, it runs before UITask/SensorSimTask
        have executed even once, so both counters would read 0 == 0 on that
        first comparison - a guaranteed false stall report, not a real one -
-       if it weren't skipped. */
+       if it weren't skipped.
+
+       One-cycle tolerance: a single missed check doesn't latch a fault by
+       itself anymore - uiMissStreak/sensorMissStreak count CONSECUTIVE
+       misses, reset to 0 the moment the counter advances again, and a fault
+       only latches once a streak reaches 2 (i.e. the counter failed to
+       advance across two checks in a row, ~2s at this task's ~1Hz cadence).
+       This absorbs a single slow-but-not-stalled cycle (e.g. UITask's
+       touch-read blocking for tens/hundreds of ms into the next check
+       boundary) without it registering as a full liveness fault, while
+       still catching a genuinely stalled task on the very next check after
+       that. */
     static uint32_t lastUiCount = 0;
     static uint32_t lastSensorCount = 0;
     static bool firstCheck = true;
+    static uint32_t uiMissStreak = 0;
+    static uint32_t sensorMissStreak = 0;
     uint32_t currentUiCount = uiTaskLiveCounter;
     uint32_t currentSensorCount = sensorTaskLiveCounter;
 
@@ -584,11 +660,29 @@ static void SafetyMonitorTask(void * pvParameters)
     {
       if (currentUiCount == lastUiCount)
       {
+        uiMissStreak++;
+      }
+      else
+      {
+        uiMissStreak = 0;
+      }
+
+      if (uiMissStreak >= 2U)
+      {
         safetyFaultLiveness = true;
         safetyFaultLivenessMask |= SAFETY_LIVENESS_FAULT_UITASK;
       }
 
       if (currentSensorCount == lastSensorCount)
+      {
+        sensorMissStreak++;
+      }
+      else
+      {
+        sensorMissStreak = 0;
+      }
+
+      if (sensorMissStreak >= 2U)
       {
         safetyFaultLiveness = true;
         safetyFaultLivenessMask |= SAFETY_LIVENESS_FAULT_SENSORTASK;
@@ -608,6 +702,17 @@ static void SafetyMonitorTask(void * pvParameters)
     {
       HAL_IWDG_Refresh(&hiwdg);
     }
+    else
+    {
+      /* Set a breakpoint here to inspect the fault flags and mask, or wire
+         up real logging once a UART/printf path exists in this project (none
+         does yet). */
+      BSP_LED_Toggle(LED1);
+    }
+
+    /* TEMPORARY DIAGNOSTIC - remove alongside safetyTaskStackHighWaterMark
+       once stack sizing is confirmed adequate. */
+    safetyTaskStackHighWaterMark = uxTaskGetStackHighWaterMark(NULL);
 
     vTaskDelay(pdMS_TO_TICKS(1000));
   }
@@ -738,8 +843,14 @@ static void CPU_CACHE_Enable(void)
   /* Enable I-Cache */
   SCB_EnableICache();
 
+  /* TODO: TEMPORARY DIAGNOSTIC - D-cache disabled to test whether it's
+     implicated in a suspected issue. Not a permanent change - re-enable
+     this once the test is done. If SCB_CleanDCache_by_Addr() in
+     my_flush_cb() (Src/lv_port_disp.c) still runs while this is disabled,
+     it's a no-op against unmanaged memory - harmless, just unnecessary
+     while D-cache is off. */
   /* Enable D-Cache */
-  SCB_EnableDCache();
+  // SCB_EnableDCache();
 }
 
 

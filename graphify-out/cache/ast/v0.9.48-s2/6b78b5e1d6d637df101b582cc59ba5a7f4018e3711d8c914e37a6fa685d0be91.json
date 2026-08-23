@@ -1,0 +1,1 @@
+{"nodes": [{"id": "$graphify-root$_middlewares_third_party_lvgl_include_lvgl_drivers_uefi_lv_uefi_h", "label": "lv_uefi.h", "file_type": "code", "source_file": "Middlewares/Third_Party/LVGL/include/lvgl/drivers/uefi/lv_uefi.h", "source_location": "L1"}], "edges": [], "raw_calls": []}

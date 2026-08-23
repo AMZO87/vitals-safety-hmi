@@ -580,7 +580,12 @@ static HAL_StatusTypeDef I2Cx_ReadMultiple(I2C_HandleTypeDef *i2c_handler,
 {
   HAL_StatusTypeDef status = HAL_OK;
 
-  status = HAL_I2C_Mem_Read(i2c_handler, Addr, (uint16_t)Reg, MemAddress, Buffer, Length, 1000);
+  /* FT5336 (and the other I2C peripherals sharing this helper) respond in
+     microseconds to low-single-digit ms; 1000ms was a generic HAL-example
+     value, not sized for this bus. 50ms gives ample margin over a working
+     device while cutting worst-case blocking (e.g. an unresponsive touch
+     controller in my_touchpad_read_cb) by 20x. */
+  status = HAL_I2C_Mem_Read(i2c_handler, Addr, (uint16_t)Reg, MemAddress, Buffer, Length, 50);
 
   /* Check the communication status */
   if(status != HAL_OK)

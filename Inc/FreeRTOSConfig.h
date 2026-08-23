@@ -113,6 +113,11 @@ to exclude the API function. */
 #define INCLUDE_vTaskDelayUntil        0
 #define INCLUDE_vTaskDelay             1
 #define INCLUDE_xTaskGetSchedulerState 1
+/* Required for uxTaskGetStackHighWaterMark() (Src/main.c) - without this,
+   tasks.c never compiles the function in at all (it's wrapped in
+   #if (INCLUDE_uxTaskGetStackHighWaterMark == 1)), so the three calls added
+   for stack-headroom diagnostics would fail to link. */
+#define INCLUDE_uxTaskGetStackHighWaterMark 1
 
 /*------------- CMSIS-RTOS V2 specific defines -----------*/
 /* When using CMSIS-RTOSv2 set configSUPPORT_STATIC_ALLOCATION to 1

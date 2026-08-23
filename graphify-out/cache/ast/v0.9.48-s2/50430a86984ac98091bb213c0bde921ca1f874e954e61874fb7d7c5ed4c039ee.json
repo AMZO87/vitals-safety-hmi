@@ -1,0 +1,1 @@
+{"nodes": [{"id": "$graphify-root$_middlewares_third_party_freertos_source_include_mpu_prototypes_h", "label": "mpu_prototypes.h", "file_type": "code", "source_file": "Middlewares/Third_Party/FreeRTOS/Source/include/mpu_prototypes.h", "source_location": "L1"}], "edges": [], "raw_calls": [], "parse_errors": {"first_error_line": 41, "multiline_error": false}}

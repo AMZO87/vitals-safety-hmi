@@ -1,0 +1,1 @@
+{"nodes": [{"id": "$graphify-root$_middlewares_third_party_lvgl_src_libs_freetype_ftmodule_h", "label": "ftmodule.h", "file_type": "code", "source_file": "Middlewares/Third_Party/LVGL/src/libs/freetype/ftmodule.h", "source_location": "L1"}], "edges": [], "raw_calls": [], "parse_errors": {"first_error_line": 25, "multiline_error": false}}
